@@ -292,8 +292,8 @@
 <input type="file" id="shot-upload-input" accept="image/*,video/*" style="display:none">
 
 <script>
-const WORKER_URL = localStorage.getItem('shotlist_worker_url') || '';
-const PROJECT_KEY = localStorage.getItem('shotlist_project_key') || 'default';
+const WORKER_URL = localStorage.getItem('shotlist_worker_url') || 'https://shotlist-sync.christopher-jorna.workers.dev';
+const PROJECT_KEY = localStorage.getItem('shotlist_project_key') || 'goldfish';
 const DRIVE_URL = localStorage.getItem('shotlist_drive_url') || 'https://drive.google.com/drive/folders/1gcDLFnxb6L6LWEA1b-WFZyFZyekFK4Wk';
 const CLIPS_PATH = localStorage.getItem('shotlist_clips_path') || '';
 let shots = [];
@@ -366,7 +366,19 @@ async function loadData() {
   if (WORKER_URL) {
     try {
       const res = await fetch(`${WORKER_URL}/api/shotlist/${PROJECT_KEY}`);
-      if (res.ok) { shots = (await res.json()).shots.map(migrateShot); document.getElementById('sync-badge').textContent='synced'; document.getElementById('sync-badge').className='sync-status connected'; render(); return; }
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.shots && data.shots.length) {
+          // Cloud has the live shared state — it wins.
+          shots = data.shots.map(migrateShot);
+          if (data.project) document.getElementById('project-title').textContent = data.project;
+          document.getElementById('sync-badge').textContent='synced';
+          document.getElementById('sync-badge').className='sync-status connected';
+          render();
+          return;
+        }
+        // Cloud is empty (first ever load) — load embedded below, then seed the cloud.
+      }
     } catch(e) {}
   }
   // Embedded data (from export script) always wins — it's the source of truth.
@@ -396,6 +408,14 @@ async function loadData() {
         try { const r = await fetch(c); if(r.ok){ const d=await r.json(); shots=(d.shots||d).map(migrateShot); if(d.project) document.getElementById('project-title').textContent=d.project; break; } } catch(e){}
       }
     }
+  }
+  if (WORKER_URL) {
+    // Cloud was empty — seed it with the data we just loaded so everyone shares it.
+    document.getElementById('sync-badge').textContent='synced';
+    document.getElementById('sync-badge').className='sync-status connected';
+    render();
+    saveData();
+    return;
   }
   document.getElementById('sync-badge').textContent='local only';
   document.getElementById('sync-badge').className='sync-status local';
