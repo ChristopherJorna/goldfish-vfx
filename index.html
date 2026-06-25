@@ -238,7 +238,7 @@
       <button class="btn-primary" onclick="assembleFilm()" style="padding:8px 16px">▶ Assemble full film</button>
       <span id="assemble-status" style="font-size:0.75rem;color:var(--text-muted)"></span>
     </div>
-    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Plays every shot in order using the graded proxy, swapping in the approved VFX version (or the latest if none approved).</div>
+    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Plays the whole film as one continuous stitched clip (graded). Re-run the GRADED export to refresh it after new VFX is approved.</div>
     <div class="video-container" id="video-container">
       <div class="video-drop" id="video-drop">
         <p>Drop a video file here, browse, or paste a Google Drive link</p>
@@ -276,7 +276,7 @@
     <div id="media-body" style="background:#000;border-radius:8px;min-height:200px;display:flex;align-items:center;justify-content:center;overflow:hidden"></div>
     <div class="modal-btns" style="justify-content:space-between;align-items:center">
       <span id="media-note" style="font-size:0.72rem;color:var(--text-muted)"></span>
-      <a id="media-download" href="#" target="_blank" rel="noopener" class="btn-save" style="padding:10px 22px;border-radius:8px;text-decoration:none;font-weight:600;font-size:0.9rem;display:none">Download full quality</a>
+      <a id="media-download" href="#" target="_blank" rel="noopener" style="padding:10px 22px;background:transparent;border:none;color:#ffffff;text-decoration:none;font-weight:700;font-size:0.95rem;display:none">Download full quality</a>
     </div>
   </div>
 </div>
@@ -591,7 +591,7 @@ function renderTable() {
     <th style="width:24px"></th><th>Shot</th><th class="thumb-cell">Frame / VFX</th>
     <th>Clip / Description</th><th>Type</th><th class="graded-cell">Graded</th>
     <th>Tool</th><th>Prompt / Brief</th><th>VFX Artist</th><th>Status</th>
-    <th class="hide-compact">Ver</th><th class="hide-mobile">Delivery</th><th>Notes</th>
+    <th class="hide-compact">Ver</th><th>Notes</th><th style="width:200px">VFX Upload</th>
   </tr></thead><tbody>`;
 
   filtered.forEach(shot => {
@@ -618,7 +618,6 @@ function renderTable() {
           <button class="thumb-btn" onclick="openMedia(${si},'video')" title="1080p clip (on Drive)">Video</button>
           <button class="thumb-btn" onclick="openMedia(${si},'audio')" title="WAV audio (on Drive)">Audio</button>
         </div>
-        ${renderVersionBlock(si)}
       </td>
       <td style="min-width:200px">
         <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px">${esc(shot.name)}</div>
@@ -633,8 +632,8 @@ function renderTable() {
       <td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>
       <td>${renderStatusSelect(si, shot.status)}</td>
       <td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>
-      <td class="hide-mobile"><input class="editable" type="date" value="${esc(shot.deliveryDate)}" onchange="updateField(${si},'deliveryDate',this.value)" style="width:110px"></td>
       <td><input class="editable" value="${esc(shot.notes)}" onchange="updateField(${si},'notes',this.value)" placeholder="Notes..."></td>
+      <td class="vfx-upload-cell" style="width:200px;min-width:160px;vertical-align:top">${renderVersionBlock(si)}</td>
     </tr>`;
   });
   html += '</tbody></table><button class="add-row-btn" onclick="addShot()">+ Add shot</button>';
@@ -677,14 +676,14 @@ function renderVersionBlock(si) {
   const shot = shots[si];
   const vers = shot.versions || [];
   const uploadBtn = `<button class="thumb-btn" style="margin-top:4px;width:100%;border-color:var(--green);color:var(--green)" onclick="triggerUpload(${si})" title="Upload a VFX version">+ Upload VFX</button>`;
-  if (!vers.length) return uploadBtn;
+  if (!vers.length) return `<div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px">No VFX uploaded</div>${uploadBtn}`;
   let idx = curVer[shot.shotId];
   if (idx === undefined || idx < 0 || idx >= vers.length) idx = vers.length - 1;
   const v = vers[idx];
-  const isVid = (v.filename||'').match(/\.(mp4|mov|webm|m4v)$/i) || (v.type||'').startsWith('video');
-  const media = isVid
-    ? `<video src="${esc(v.proxyUrl)}" style="width:100%;display:block" muted onclick="this.paused?this.play():this.pause()"></video>`
-    : `<img src="${esc(v.thumbUrl||v.proxyUrl)}" style="width:100%;display:block;cursor:pointer" onclick="openVersionPreview(${si})">`;
+  const isVid = !!((v.filename||'').match(/\.(mp4|mov|webm|m4v)$/i) || (v.type||'').startsWith('video'));
+  const poster = isVid
+    ? `<video src="${esc(v.proxyUrl)}#t=0.1" preload="metadata" muted style="width:100%;display:block;cursor:pointer" onclick="openVersionMedia(${si},'video')"></video>`
+    : `<img src="${esc(v.thumbUrl||v.proxyUrl)}" style="width:100%;display:block;cursor:pointer" onclick="openVersionMedia(${si},'still')">`;
   const nav = vers.length > 1
     ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:2px">
          <button class="thumb-btn" style="flex:0 0 auto;padding:2px 8px" onclick="verNav(${si},-1)">&lt;</button>
@@ -693,10 +692,14 @@ function renderVersionBlock(si) {
        </div>`
     : `<div style="font-size:0.6rem;color:var(--text-muted);text-align:center;margin-top:2px">v${v.v}</div>`;
   return `
-    <div class="submission-wrap" style="margin-top:6px">
-      ${media}
+    <div class="submission-wrap" style="margin-top:2px">
+      ${poster}
       <span class="submission-label">${v.approved?'APPROVED':'VFX'} v${v.v}</span>
       <button class="submission-remove" onclick="removeVersion(${si})" title="Remove this version">x</button>
+    </div>
+    <div class="thumb-actions" style="margin-top:3px">
+      <button class="thumb-btn" onclick="openVersionMedia(${si},'still')" title="VFX still">Still</button>
+      <button class="thumb-btn" onclick="openVersionMedia(${si},'video')" title="VFX video">Video</button>
     </div>
     ${nav}
     <label style="display:flex;align-items:center;gap:4px;font-size:0.65rem;color:var(--text-muted);margin-top:3px;cursor:pointer">
@@ -729,18 +732,28 @@ function setVersionComment(si, val) {
   v.comment = val;
   saveData();
 }
-function openVersionPreview(si) {
+function openVersionMedia(si, kind) {
   const v = curVersion(shots[si]);
   if (!v) return;
+  const isVid = !!((v.filename||'').match(/\.(mp4|mov|webm|m4v)$/i) || (v.type||'').startsWith('video'));
   const body = document.getElementById('media-body');
-  document.getElementById('media-title').textContent = `Shot ${shots[si].number} — VFX v${v.v}`;
-  const isVid = (v.filename||'').match(/\.(mp4|mov|webm|m4v)$/i) || (v.type||'').startsWith('video');
-  body.innerHTML = isVid
-    ? `<video controls autoplay style="width:100%;max-height:70vh" src="${esc(v.proxyUrl)}"></video>`
-    : `<img src="${esc(v.proxyUrl)}" style="width:100%;max-height:70vh;object-fit:contain">`;
   const dl = document.getElementById('media-download');
-  if (v.driveId) { dl.href = driveView(v.driveId); dl.style.display=''; document.getElementById('media-note').textContent='Opens full quality in Drive.'; }
-  else { dl.style.display='none'; document.getElementById('media-note').textContent='Proxy preview (full master mirrors to Drive).'; }
+  const note = document.getElementById('media-note');
+  document.getElementById('media-title').textContent = `Shot ${shots[si].number} — VFX v${v.v} (${kind==='video'?'video':'still'})`;
+  if (kind === 'video') {
+    if (isVid) {
+      body.innerHTML = `<video controls autoplay style="width:100%;max-height:70vh" src="${esc(v.proxyUrl)}"></video>`;
+    } else {
+      body.innerHTML = `<div style="color:var(--text-muted);padding:48px;text-align:center">No video generated yet for this version.</div>`;
+    }
+  } else { // still
+    body.innerHTML = isVid
+      ? `<video src="${esc(v.proxyUrl)}#t=0.1" preload="metadata" muted style="width:100%;max-height:70vh"></video>`
+      : `<img src="${esc(v.proxyUrl)}" style="width:100%;max-height:70vh;object-fit:contain">`;
+  }
+  const noFile = (kind === 'video' && !isVid);
+  if (v.driveId && !noFile) { dl.href = driveView(v.driveId); dl.style.display=''; note.textContent='Opens full quality in Drive.'; }
+  else { dl.style.display='none'; note.textContent = noFile ? '' : 'Proxy preview (full master mirrors to Drive).'; }
   document.getElementById('media-modal').classList.add('active');
 }
 
@@ -993,36 +1006,21 @@ function loadVideo(file) {
   localStorage.setItem('shotlist_preview_file', file.name);
 }
 
-// ── Assembled film: play all shots in order, swapping in approved/latest VFX ──
+// ── Assembled film: one continuous stitched MP4 (seamless, no per-clip load gaps) ──
 function assembleFilm() {
-  const ordered = [...shots].sort((a,b) => (a.number||0) - (b.number||0));
-  const playlist = [];
-  for (const shot of ordered) {
-    const ver = previewVersion(shot);                 // approved else latest VFX
-    const src = (ver && ver.proxyUrl) || shot.clipProxy || '';
-    if (src) playlist.push({ src, label: `Shot ${shot.number}${ver ? ' (VFX v'+ver.v+')' : ''}` });
-  }
   const status = document.getElementById('assemble-status');
   const container = document.getElementById('video-container');
-  if (!playlist.length) {
-    status.textContent = 'No clip proxies yet. Run the GRADED export first.';
+  // The pipeline pre-stitches all clip proxies into web/assembled_film.mp4.
+  const withProxy = shots.find(s => s.clipProxy);
+  if (!withProxy) {
+    status.textContent = 'No film yet. Run the GRADED export first.';
     return;
   }
-  status.textContent = `${playlist.length} shots assembled`;
-  let i = 0;
-  container.innerHTML = `<video id="assembled-video" controls autoplay style="width:100%;height:100%"></video>
-    <div id="assembled-label" style="position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.6);color:#fff;font-size:0.7rem;padding:2px 8px;border-radius:4px"></div>`;
-  const vid = document.getElementById('assembled-video');
-  const lbl = document.getElementById('assembled-label');
-  function playAt(n) {
-    if (n >= playlist.length) { lbl.textContent = 'End'; return; }
-    i = n;
-    vid.src = playlist[n].src;
-    lbl.textContent = `${n+1}/${playlist.length} — ${playlist[n].label}`;
-    vid.play().catch(()=>{});
-  }
-  vid.addEventListener('ended', () => playAt(i + 1));
-  playAt(0);
+  const webDir = withProxy.clipProxy.replace(/\/[^/]+$/, '');   // e.g. export_v006/web
+  const filmUrl = `${webDir}/assembled_film.mp4`;
+  status.textContent = 'Playing stitched film';
+  container.innerHTML = `<video controls autoplay playsinline style="width:100%;height:100%" src="${filmUrl}"
+      onerror="document.getElementById('assemble-status').textContent='Stitched film not found — re-run the GRADED export to generate it.'"></video>`;
 }
 
 function loadDriveVideo() {
