@@ -628,16 +628,26 @@ function renderTable() {
       <td><span class="vfx-badge ${shot.needsVfx?'is-vfx':'no-vfx'}" onclick="toggleVfx(${si})">${shot.needsVfx?'VFX':'-'}</span></td>
       <td class="graded-cell"><input type="checkbox" ${shot.graded?'checked':''} onchange="updateField(${si},'graded',this.checked)" title="Graded"></td>
       <td><input class="editable" value="${esc(shot.tool)}" onchange="updateField(${si},'tool',this.value)" placeholder="Tool..." style="width:80px"></td>
-      <td><textarea class="editable" onchange="updateField(${si},'prompt',this.value)" placeholder="VFX brief...">${esc(shot.prompt)}</textarea></td>
+      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'prompt',this.value)" placeholder="VFX brief...">${esc(shot.prompt)}</textarea></td>
       <td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>
       <td>${renderStatusSelect(si, shot.status)}</td>
       <td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>
-      <td><input class="editable" value="${esc(shot.notes)}" onchange="updateField(${si},'notes',this.value)" placeholder="Notes..."></td>
+      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'notes',this.value)" placeholder="Notes...">${esc(shot.notes)}</textarea></td>
       <td class="vfx-upload-cell" style="width:200px;min-width:160px;vertical-align:top">${renderVersionBlock(si)}</td>
     </tr>`;
   });
   html += '</tbody></table><button class="add-row-btn" onclick="addShot()">+ Add shot</button>';
   container.innerHTML = html;
+  // Size every auto-grow textarea to fit its content after (re)render.
+  container.querySelectorAll('textarea.editable').forEach(autogrow);
+}
+
+// Grow a textarea to fit its content (no inner scrollbar, no fixed single line).
+function autogrow(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.max(el.scrollHeight, 32) + 'px';
+  el.style.overflowY = 'hidden';
 }
 
 // ── Download / Upload / Clip ──
@@ -674,6 +684,8 @@ function handleDrop(event, si) {
 // ── Versioned VFX uploads + carousel ──
 function renderVersionBlock(si) {
   const shot = shots[si];
+  // VFX upload only applies to shots flagged as needing VFX.
+  if (!shot.needsVfx) return `<span style="color:var(--text-muted);font-size:0.7rem">—</span>`;
   const vers = shot.versions || [];
   const uploadBtn = `<button class="thumb-btn" style="margin-top:4px;width:100%;border-color:var(--green);color:var(--green)" onclick="triggerUpload(${si})" title="Upload a VFX version">+ Upload VFX</button>`;
   if (!vers.length) return `<div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px">No VFX uploaded</div>${uploadBtn}`;
@@ -705,7 +717,7 @@ function renderVersionBlock(si) {
     <label style="display:flex;align-items:center;gap:4px;font-size:0.65rem;color:var(--text-muted);margin-top:3px;cursor:pointer">
       <input type="checkbox" ${v.approved?'checked':''} onchange="setVersionApproved(${si},this.checked)" style="accent-color:var(--green)"> Approved (this version)
     </label>
-    <textarea class="editable" style="margin-top:3px;font-size:0.7rem;min-height:32px" placeholder="Comment for v${v.v}..." onchange="setVersionComment(${si},this.value)">${esc(v.comment||'')}</textarea>
+    <textarea class="editable" style="margin-top:3px;font-size:0.7rem;min-height:32px" placeholder="Comment for v${v.v}..." oninput="autogrow(this)" onchange="setVersionComment(${si},this.value)">${esc(v.comment||'')}</textarea>
     ${uploadBtn}`;
 }
 
