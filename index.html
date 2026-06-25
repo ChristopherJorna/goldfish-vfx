@@ -116,6 +116,7 @@
   .vfx-badge.no-vfx { background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); }
   .vfx-badge:hover { border-color: var(--accent); }
 
+  .dim-cell { text-align: center; color: var(--text-muted); opacity: 0.4; }
   .graded-cell { text-align: center; width: 50px; }
   .graded-cell input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
 
@@ -627,11 +628,11 @@ function renderTable() {
       </td>
       <td><span class="vfx-badge ${shot.needsVfx?'is-vfx':'no-vfx'}" onclick="toggleVfx(${si})">${shot.needsVfx?'VFX':'-'}</span></td>
       <td class="graded-cell"><input type="checkbox" ${shot.graded?'checked':''} onchange="updateField(${si},'graded',this.checked)" title="Graded"></td>
-      <td><input class="editable" value="${esc(shot.tool)}" onchange="updateField(${si},'tool',this.value)" placeholder="Tool..." style="width:80px"></td>
-      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'prompt',this.value)" placeholder="VFX brief...">${esc(shot.prompt)}</textarea></td>
-      <td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>
-      <td>${renderStatusSelect(si, shot.status)}</td>
-      <td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>
+      ${shot.needsVfx ? `<td><input class="editable" value="${esc(shot.tool)}" onchange="updateField(${si},'tool',this.value)" placeholder="Tool..." style="width:80px"></td>` : `<td class="dim-cell">—</td>`}
+      ${shot.needsVfx ? `<td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'prompt',this.value)" placeholder="VFX brief...">${esc(shot.prompt)}</textarea></td>` : `<td class="dim-cell">—</td>`}
+      ${shot.needsVfx ? `<td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>` : `<td class="dim-cell">—</td>`}
+      ${shot.needsVfx ? `<td>${renderStatusSelect(si, shot.status)}</td>` : `<td class="dim-cell">—</td>`}
+      ${shot.needsVfx ? `<td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>` : `<td class="hide-compact dim-cell">—</td>`}
       <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'notes',this.value)" placeholder="Notes...">${esc(shot.notes)}</textarea></td>
       <td class="vfx-upload-cell" style="width:200px;min-width:160px;vertical-align:top">${renderVersionBlock(si)}</td>
     </tr>`;
