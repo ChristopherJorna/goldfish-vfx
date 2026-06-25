@@ -821,6 +821,7 @@ function renderVersionBlock(si) {
     <label style="display:flex;align-items:center;gap:4px;font-size:0.65rem;color:var(--text-muted);margin-top:3px;cursor:pointer">
       <input type="checkbox" ${v.approved?'checked':''} onchange="setVersionApproved(${si},this.checked)" style="accent-color:var(--green)"> Approved (this version)
     </label>
+    <button class="thumb-btn" style="margin-top:3px;width:100%;border-color:#c0392b;color:#e74c3c" onclick="removeVersion(${si})" title="Delete the VFX version shown above">&#128465; Delete v${v.v}</button>
     ${uploadBtn}`;
 }
 
