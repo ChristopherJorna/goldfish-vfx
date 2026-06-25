@@ -633,7 +633,8 @@ function renderTable() {
       ${shot.needsVfx ? `<td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>` : `<td class="dim-cell">—</td>`}
       ${shot.needsVfx ? `<td>${renderStatusSelect(si, shot.status)}</td>` : `<td class="dim-cell">—</td>`}
       ${shot.needsVfx ? `<td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>` : `<td class="hide-compact dim-cell">—</td>`}
-      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'notes',this.value)" placeholder="Notes...">${esc(shot.notes)}</textarea></td>
+      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'notes',this.value)" placeholder="Notes...">${esc(shot.notes)}</textarea>
+        ${shot.needsVfx ? `<button class="thumb-btn" style="margin-top:4px;width:100%;border-color:var(--accent);color:var(--accent)" onclick="submitFeedback(${si})" title="Send this note straight to MARVIN">Send to MARVIN</button>` : ''}</td>
       <td class="vfx-upload-cell" style="width:200px;min-width:160px;vertical-align:top">${renderVersionBlock(si)}</td>
     </tr>`;
   });
@@ -689,7 +690,8 @@ function renderVersionBlock(si) {
   if (!shot.needsVfx) return `<span style="color:var(--text-muted);font-size:0.7rem">—</span>`;
   const vers = shot.versions || [];
   const uploadBtn = `<button class="thumb-btn" style="margin-top:4px;width:100%;border-color:var(--green);color:var(--green)" onclick="triggerUpload(${si})" title="Upload a VFX version">+ Upload VFX</button>`;
-  if (!vers.length) return `<div style="font-size:0.65rem;color:var(--text-muted);margin-bottom:4px">No VFX uploaded</div>${uploadBtn}`;
+  const brief = genBrief(si);
+  if (!vers.length) return `${brief}<div style="font-size:0.65rem;color:var(--text-muted);margin:4px 0">No VFX uploaded</div>${uploadBtn}`;
   let idx = curVer[shot.shotId];
   if (idx === undefined || idx < 0 || idx >= vers.length) idx = vers.length - 1;
   const v = vers[idx];
@@ -705,10 +707,10 @@ function renderVersionBlock(si) {
        </div>`
     : `<div style="font-size:0.6rem;color:var(--text-muted);text-align:center;margin-top:2px">v${v.v}</div>`;
   return `
+    ${brief}
     <div class="submission-wrap" style="margin-top:2px">
       ${poster}
       <span class="submission-label">${v.approved?'APPROVED':'VFX'} v${v.v}</span>
-      <button class="submission-remove" onclick="removeVersion(${si})" title="Remove this version">x</button>
     </div>
     <div class="thumb-actions" style="margin-top:3px">
       <button class="thumb-btn" onclick="openVersionMedia(${si},'still')" title="VFX still">Still</button>
@@ -720,6 +722,47 @@ function renderVersionBlock(si) {
     </label>
     <textarea class="editable" style="margin-top:3px;font-size:0.7rem;min-height:32px" placeholder="Comment for v${v.v}..." oninput="autogrow(this)" onchange="setVersionComment(${si},this.value)">${esc(v.comment||'')}</textarea>
     ${uploadBtn}`;
+}
+
+// ── Generation brief (manual Seedance canvas) ──
+// Each VFX shot shows the ready prompt + settings so CJ can generate manually in
+// the Higgsfield browser (Seedance Mini is unlimited there, not via CLI).
+function genVariations(shot) {
+  // Preferred: shot.genPrompts = [{label, prompt, settings}]. Fallbacks below.
+  if (Array.isArray(shot.genPrompts) && shot.genPrompts.length) return shot.genPrompts;
+  const p = shot.genPrompt || shot.prompt || '';
+  if (!p) return [];
+  return [{ label: 'Prompt', prompt: p, settings: shot.genSettings || '' }];
+}
+function genBrief(si) {
+  const shot = shots[si];
+  const vars = genVariations(shot);
+  if (!vars.length) return '';
+  const rows = vars.map((g, gi) => `
+    <div style="margin-top:4px;padding-top:4px;${gi?'border-top:1px dashed var(--border)':''}">
+      <div style="font-size:0.6rem;color:var(--accent);font-weight:700">${esc(g.label||('Variation '+(gi+1)))}</div>
+      ${g.settings ? `<div style="font-size:0.58rem;color:var(--text-muted)">${esc(g.settings)}</div>` : ''}
+      <div style="font-size:0.62rem;color:var(--text);white-space:pre-wrap;max-height:80px;overflow:auto;margin:2px 0">${esc(g.prompt)}</div>
+      <button class="thumb-btn" style="width:100%;border-color:var(--accent);color:var(--accent)" onclick="copyGenPrompt(${si},${gi})" title="Copy for manual generation">Copy</button>
+    </div>`).join('');
+  return `
+    <details class="gen-brief" style="margin-bottom:4px;border:1px solid var(--border);border-radius:4px;padding:3px 5px">
+      <summary style="font-size:0.62rem;color:var(--accent);cursor:pointer;font-weight:700">GEN BRIEF (${vars.length})</summary>
+      ${rows}
+    </details>`;
+}
+function copyGenPrompt(si, gi) {
+  const vars = genVariations(shots[si]);
+  const g = vars[gi||0]; if (!g) return;
+  navigator.clipboard.writeText(g.prompt).then(() => showToast('Prompt copied — paste into Higgsfield')).catch(() => prompt('Prompt:', g.prompt));
+}
+
+// Push a shot's note straight to the shared cloud so MARVIN sees it immediately.
+function submitFeedback(si) {
+  const shot = shots[si];
+  shot.feedbackSubmittedAt = new Date().toISOString();
+  saveData();
+  showToast(`Feedback for Shot ${shot.number} sent to MARVIN`);
 }
 
 function verNav(si, dir) {
