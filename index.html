@@ -197,6 +197,7 @@
     <div class="header-left">
       <h1 id="project-title">GOLDFISH</h1>
       <span class="meta" id="project-meta"></span>
+      <span class="meta" id="build-stamp" style="color:var(--accent);font-weight:700">build 2026-06-25-c</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="btn-small" onclick="openSettings()">Settings</button>
@@ -324,7 +325,7 @@ const DRIVE_URL = CFG.driveGradedUrl || localStorage.getItem('shotlist_drive_url
 const CLIPS_PATH = localStorage.getItem('shotlist_clips_path') || '';
 // R2 upload endpoint (artist VFX uploads). Set by export config when the
 // upload-enabled Worker is deployed; until then in-page upload falls back to local.
-const UPLOAD_URL = CFG.uploadUrl || localStorage.getItem('shotlist_upload_url') || '';
+const UPLOAD_URL = CFG.uploadUrl || localStorage.getItem('shotlist_upload_url') || 'https://shotlist-sync.christopher-jorna.workers.dev/api/upload';
 
 // ── Drive deep-link helpers ──
 function driveView(id) { return `https://drive.google.com/file/d/${id}/view`; }
