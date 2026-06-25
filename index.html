@@ -504,14 +504,49 @@ function previewVersion(shot) {
   const appr = shot.versions.filter(v => v.approved);
   return appr.length ? appr[appr.length - 1] : shot.versions[shot.versions.length - 1];
 }
+// Notes shown in the Notes column. Per-version once a VFX version exists (so the
+// note follows the carousel), else the shot-level note (before any upload).
+function activeNote(shot) {
+  const v = curVersion(shot);
+  return v ? (v.comment || '') : (shot.notes || '');
+}
+function setActiveNote(si, val) {
+  const shot = shots[si];
+  const v = curVersion(shot);
+  if (v) v.comment = val; else shot.notes = val;
+  saveData();
+}
 
 async function saveData() {
   if (saving) { saveQueued = true; return; }
   saving = true;
-  localStorage.setItem(`shotlist_${PROJECT_KEY}`, JSON.stringify(shots));
-  if (WORKER_URL) { try { await fetch(`${WORKER_URL}/api/shotlist/${PROJECT_KEY}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shots, updated: new Date().toISOString()}) }); } catch(e){} }
-  saving = false;
-  if (saveQueued) { saveQueued = false; saveData(); }
+  try {
+    // Cloud is the DURABLE store (KV ~25MB) and wins on load, so save it FIRST and
+    // always — even if localStorage can't hold a big VFX upload. (Previously a video
+    // blob threw on localStorage.setItem and the cloud PUT below never ran, so the
+    // upload vanished on reload. Never again.)
+    if (WORKER_URL) {
+      try {
+        const res = await fetch(`${WORKER_URL}/api/shotlist/${PROJECT_KEY}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({shots, updated: new Date().toISOString()}) });
+        if (!res.ok) showToast(`Cloud save failed (${res.status}) — upload may be too large to store`);
+      } catch(e) { showToast('Cloud save failed (offline?) — change not synced'); }
+    }
+    // Local cache. Inline VFX blobs (data: URLs) can blow the ~5MB quota; if so, store a
+    // lite copy with blobs stripped so notes/metadata still persist (cloud holds the blob).
+    try {
+      localStorage.setItem(`shotlist_${PROJECT_KEY}`, JSON.stringify(shots));
+    } catch(e) {
+      try {
+        const lite = shots.map(s => ({ ...s, versions: (s.versions||[]).map(v =>
+          (v.proxyUrl||'').startsWith('data:') ? { ...v, proxyUrl:'', thumbUrl:'', _blobInCloud:true } : v) }));
+        localStorage.setItem(`shotlist_${PROJECT_KEY}`, JSON.stringify(lite));
+        showToast('Local storage full — large uploads kept in cloud only');
+      } catch(e2) {}
+    }
+  } finally {
+    saving = false;
+    if (saveQueued) { saveQueued = false; saveData(); }
+  }
 }
 
 function saveSubmissions() {
@@ -633,7 +668,9 @@ function renderTable() {
       ${shot.needsVfx ? `<td><select class="editable" onchange="updateField(${si},'assignee',this.value)" style="width:80px"><option value="" ${!shot.assignee?'selected':''}>-</option><option value="CJ" ${shot.assignee==='CJ'?'selected':''}>CJ</option><option value="Romet" ${shot.assignee==='Romet'?'selected':''}>Romet</option></select></td>` : `<td class="dim-cell">—</td>`}
       ${shot.needsVfx ? `<td>${renderStatusSelect(si, shot.status)}</td>` : `<td class="dim-cell">—</td>`}
       ${shot.needsVfx ? `<td class="hide-compact" style="text-align:center"><input class="editable" value="${shot.version||''}" onchange="updateField(${si},'version',parseInt(this.value)||0)" style="width:35px;text-align:center" placeholder="0"></td>` : `<td class="hide-compact dim-cell">—</td>`}
-      <td><textarea class="editable" oninput="autogrow(this)" onchange="updateField(${si},'notes',this.value)" placeholder="Notes...">${esc(shot.notes)}</textarea>
+      <td>
+        ${shot.needsVfx && (shot.versions||[]).length ? `<div style="font-size:0.6rem;color:var(--accent);font-weight:700;margin-bottom:2px">NOTES — v${curVersion(shot).v}</div>` : ''}
+        <textarea class="editable" oninput="autogrow(this)" onchange="setActiveNote(${si},this.value)" placeholder="${shot.needsVfx && (shot.versions||[]).length ? 'Notes for this version...' : 'Notes...'}">${esc(activeNote(shot))}</textarea>
         ${shot.needsVfx ? `<button class="thumb-btn" style="margin-top:4px;width:100%;border-color:var(--accent);color:var(--accent)" onclick="submitFeedback(${si})" title="Send this note straight to MARVIN">Send to MARVIN</button>` : ''}</td>
       <td class="vfx-upload-cell" style="width:200px;min-width:160px;vertical-align:top">${renderVersionBlock(si)}</td>
     </tr>`;
@@ -696,8 +733,13 @@ function renderVersionBlock(si) {
   if (idx === undefined || idx < 0 || idx >= vers.length) idx = vers.length - 1;
   const v = vers[idx];
   const isVid = !!((v.filename||'').match(/\.(mp4|mov|webm|m4v)$/i) || (v.type||'').startsWith('video'));
+  // A video stored as an inline data: URL freezes the tab if embedded on every render.
+  // Show a lightweight click-to-play placeholder instead; it only loads in the modal.
+  const inlineBlob = (v.proxyUrl||'').startsWith('data:');
   const poster = isVid
-    ? `<video src="${esc(v.proxyUrl)}#t=0.1" preload="metadata" muted style="width:100%;display:block;cursor:pointer" onclick="openVersionMedia(${si},'video')"></video>`
+    ? (inlineBlob
+        ? `<div onclick="openVersionMedia(${si},'video')" style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;background:#111;border:1px solid var(--border);cursor:pointer;font-size:0.7rem;color:var(--text-muted)">&#9654; v${v.v} — click to play</div>`
+        : `<video src="${esc(v.proxyUrl)}#t=0.1" preload="metadata" muted style="width:100%;display:block;cursor:pointer" onclick="openVersionMedia(${si},'video')"></video>`)
     : `<img src="${esc(v.thumbUrl||v.proxyUrl)}" style="width:100%;display:block;cursor:pointer" onclick="openVersionMedia(${si},'still')">`;
   const nav = vers.length > 1
     ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;margin-top:2px">
@@ -720,7 +762,6 @@ function renderVersionBlock(si) {
     <label style="display:flex;align-items:center;gap:4px;font-size:0.65rem;color:var(--text-muted);margin-top:3px;cursor:pointer">
       <input type="checkbox" ${v.approved?'checked':''} onchange="setVersionApproved(${si},this.checked)" style="accent-color:var(--green)"> Approved (this version)
     </label>
-    <textarea class="editable" style="margin-top:3px;font-size:0.7rem;min-height:32px" placeholder="Comment for v${v.v}..." oninput="autogrow(this)" onchange="setVersionComment(${si},this.value)">${esc(v.comment||'')}</textarea>
     ${uploadBtn}`;
 }
 
@@ -828,15 +869,22 @@ async function handleSubmissionFile(file, si) {
     } catch(e) { console.warn('R2 upload failed, falling back to local', e); }
   }
   if (!proxyUrl) {
-    // Fallback: keep it local (data URL) until the R2 upload Worker is deployed.
+    // Fallback: inline the file as a data URL until the R2 upload Worker is deployed.
+    // Cloud KV caps at ~25MB, so a big video may not persist — warn before storing it.
+    const tooBig = file.size > 24 * 1024 * 1024;
+    if (tooBig && !confirm(`This file is ${(file.size/1048576).toFixed(1)}MB. No upload server is configured, so it must be stored inline and the cloud limit is ~25MB — it may NOT save. Deploy R2 or use the browser-generate flow instead.\n\nStore anyway?`)) {
+      showToast('Upload cancelled — file too large to store inline');
+      return;
+    }
     proxyUrl = await new Promise(r => { const fr=new FileReader(); fr.onload=e=>r(e.target.result); fr.readAsDataURL(file); });
+    if (!UPLOAD_URL) showToast('No upload server — stored in cloud only (R2 not deployed)');
   }
   shot.versions = shot.versions || [];
   shot.versions.push({ v: nextV, proxyUrl, driveId, thumbUrl: proxyUrl, comment:'', approved:false, uploadedAt:new Date().toISOString(), by: shot.assignee||'', filename: safeName, type: file.type });
   curVer[shot.shotId] = shot.versions.length - 1;
   if (shot.status === 'not-started' || shot.status === 'wip') shot.status = 'review';
   shot.version = nextV;
-  saveData(); render();
+  await saveData(); render();
   showToast(`Added VFX v${nextV} for ${shot.shotId}`);
 }
 
