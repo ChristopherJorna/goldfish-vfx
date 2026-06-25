@@ -343,9 +343,15 @@ function mediaFor(shot, kind) {
   return map[kind] || {};
 }
 let shots = [];
+// Friendly model names for the "prompt used" log on each VFX version.
+const FRIENDLY = { seedance_2_0_mini: 'Seedance 2.0 Mini', seedance_2_0: 'Seedance 2.0', nano_banana_2: 'Nano Banana Pro' };
 let submissions = {}; // shotId -> {dataUrl, filename, type}
 let saving = false;
 let saveQueued = false;
+// Set true when the cloud was unreachable on load. While frozen, saveData() refuses
+// to PUT — a stale local snapshot must never overwrite the shared cloud after a
+// transient GET failure. Cleared only by a successful reload.
+let cloudUnreachable = false;
 let lightboxShotIdx = -1;
 let lightboxShowSubmission = false;
 
@@ -408,24 +414,49 @@ function defaultShot(index) {
 }
 
 // ── Persistence ──
-async function loadData() {
-  if (WORKER_URL) {
+// Fetch the cloud state with a few retries. Returns:
+//   { ok:true,  data }   — GET succeeded (data may be empty {shots:[]})
+//   { ok:false }         — GET failed every attempt (transient/offline)
+// A FAILED GET must NEVER be treated as "cloud is empty" — that path used to
+// reseed the cloud from the stale embedded snapshot and wipe everyone's uploads
+// (a single transient Cloudflare error on refresh = total data loss).
+async function fetchCloud(attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(`${WORKER_URL}/api/shotlist/${PROJECT_KEY}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.shots && data.shots.length) {
-          // Cloud has the live shared state — it wins.
-          shots = data.shots.map(migrateShot);
-          if (data.project) document.getElementById('project-title').textContent = data.project;
-          document.getElementById('sync-badge').textContent='synced';
-          document.getElementById('sync-badge').className='sync-status connected';
-          render();
-          return;
-        }
-        // Cloud is empty (first ever load) — load embedded below, then seed the cloud.
-      }
+      const res = await fetch(`${WORKER_URL}/api/shotlist/${PROJECT_KEY}`, { cache: 'no-store' });
+      if (res.ok) return { ok: true, data: await res.json() };
     } catch(e) {}
+    // brief backoff before retrying a flaky worker (1102 etc.)
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, 400 * (i + 1)));
+  }
+  return { ok: false };
+}
+
+async function loadData() {
+  let cloudReachable = false, cloudEmpty = false;
+  if (WORKER_URL) {
+    const res = await fetchCloud();
+    if (res.ok) {
+      cloudReachable = true;
+      const data = res.data;
+      if (data && data.shots && data.shots.length) {
+        // Cloud has the live shared state — it wins. Always.
+        shots = data.shots.map(migrateShot);
+        if (data.project) document.getElementById('project-title').textContent = data.project;
+        document.getElementById('sync-badge').textContent='synced';
+        document.getElementById('sync-badge').className='sync-status connected';
+        render();
+        return;
+      }
+      // GET succeeded AND the cloud is genuinely empty — safe to seed below.
+      cloudEmpty = true;
+    } else {
+      // GET FAILED. The cloud may well hold the real data — we just couldn't reach
+      // it. Do NOT seed/overwrite from embedded. Show local-only data read-only and
+      // let the user retry. saveData() stays disabled this session so a stale snapshot
+      // can never clobber the shared cloud.
+      cloudUnreachable = true;
+    }
   }
   // Embedded data (from export script) always wins — it's the source of truth.
   // localStorage is only used for runtime edits BETWEEN exports.
@@ -455,8 +486,17 @@ async function loadData() {
       }
     }
   }
-  if (WORKER_URL) {
-    // Cloud was empty — seed it with the data we just loaded so everyone shares it.
+  if (cloudUnreachable) {
+    // Couldn't reach the cloud. Render what we have but DO NOT write back — writes are
+    // frozen this session so a refresh-time hiccup can't wipe the shared state.
+    document.getElementById('sync-badge').textContent='cloud unreachable — refresh to retry (not saving)';
+    document.getElementById('sync-badge').className='sync-status local';
+    showToast('Could not reach the cloud — showing local copy, edits are NOT being saved. Refresh to reconnect.');
+    render();
+    return;
+  }
+  if (WORKER_URL && cloudReachable && cloudEmpty) {
+    // Cloud confirmed empty (first ever load) — seed it with embedded data so everyone shares it.
     document.getElementById('sync-badge').textContent='synced';
     document.getElementById('sync-badge').className='sync-status connected';
     render();
@@ -519,6 +559,12 @@ function setActiveNote(si, val) {
 }
 
 async function saveData() {
+  if (cloudUnreachable && WORKER_URL) {
+    // Cloud was unreachable on load — refuse to write so we can't clobber the shared
+    // state with a partial/stale local copy. Tell the user to refresh.
+    showToast('Not saved — cloud was unreachable on load. Refresh to reconnect, then re-do your change.');
+    return;
+  }
   if (saving) { saveQueued = true; return; }
   saving = true;
   try {
@@ -749,6 +795,17 @@ function renderVersionBlock(si) {
          <button class="thumb-btn" style="flex:0 0 auto;padding:2px 8px" onclick="verNav(${si},1)">&gt;</button>
        </div>`
     : `<div style="font-size:0.6rem;color:var(--text-muted);text-align:center;margin-top:2px">v${v.v}</div>`;
+  // Prompt that actually produced THIS version (logged by goldfish_add_version.py).
+  const usedMeta = [FRIENDLY[v.model] || v.model, v.approach].filter(Boolean).join(' · ');
+  const usedPrompt = (v.prompt || '').trim();
+  const promptLog = usedPrompt
+    ? `<details class="gen-brief" style="margin-top:3px;border:1px solid var(--border);border-radius:4px;padding:3px 5px">
+         <summary style="font-size:0.6rem;color:var(--text-muted);cursor:pointer;font-weight:700">PROMPT USED (v${v.v})</summary>
+         ${usedMeta ? `<div style="font-size:0.58rem;color:var(--accent);margin-top:2px">${esc(usedMeta)}</div>` : ''}
+         <div style="font-size:0.62rem;color:var(--text);white-space:pre-wrap;max-height:120px;overflow:auto;margin:2px 0">${esc(usedPrompt)}</div>
+         <button class="thumb-btn" style="width:100%" onclick="copyVersionPrompt(${si},${idx})" title="Copy the prompt that made this version">Copy prompt</button>
+       </details>`
+    : '';
   return `
     ${brief}
     <div class="submission-wrap" style="margin-top:2px">
@@ -760,6 +817,7 @@ function renderVersionBlock(si) {
       <button class="thumb-btn" onclick="openVersionMedia(${si},'video')" title="VFX video">Video</button>
     </div>
     ${nav}
+    ${promptLog}
     <label style="display:flex;align-items:center;gap:4px;font-size:0.65rem;color:var(--text-muted);margin-top:3px;cursor:pointer">
       <input type="checkbox" ${v.approved?'checked':''} onchange="setVersionApproved(${si},this.checked)" style="accent-color:var(--green)"> Approved (this version)
     </label>
@@ -797,6 +855,11 @@ function copyGenPrompt(si, gi) {
   const vars = genVariations(shots[si]);
   const g = vars[gi||0]; if (!g) return;
   navigator.clipboard.writeText(g.prompt).then(() => showToast('Prompt copied — paste into Higgsfield')).catch(() => prompt('Prompt:', g.prompt));
+}
+// Copy the prompt that actually generated a specific uploaded version.
+function copyVersionPrompt(si, vi) {
+  const v = (shots[si].versions || [])[vi]; if (!v || !v.prompt) return;
+  navigator.clipboard.writeText(v.prompt).then(() => showToast('Generation prompt copied')).catch(() => prompt('Prompt:', v.prompt));
 }
 
 // Push a shot's note straight to the shared cloud so MARVIN sees it immediately.
@@ -881,7 +944,9 @@ async function handleSubmissionFile(file, si) {
     if (!UPLOAD_URL) showToast('No upload server — stored in cloud only (R2 not deployed)');
   }
   shot.versions = shot.versions || [];
-  shot.versions.push({ v: nextV, proxyUrl, driveId, thumbUrl: proxyUrl, comment:'', approved:false, uploadedAt:new Date().toISOString(), by: shot.assignee||'', filename: safeName, type: file.type });
+  // Log the prompt used to generate this upload (optional — blank is fine).
+  const usedPrompt = (prompt('Prompt used to generate this version? (optional — leave blank to skip)', '') || '').trim();
+  shot.versions.push({ v: nextV, proxyUrl, driveId, thumbUrl: proxyUrl, comment:'', approved:false, uploadedAt:new Date().toISOString(), by: shot.assignee||'', filename: safeName, type: file.type, prompt: usedPrompt });
   curVer[shot.shotId] = shot.versions.length - 1;
   if (shot.status === 'not-started' || shot.status === 'wip') shot.status = 'review';
   shot.version = nextV;
