@@ -247,10 +247,10 @@
   <div class="preview">
     <h2>Film Preview</h2>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-      <button class="btn-primary" onclick="assembleFilm()" style="padding:8px 16px">▶ Assemble full film</button>
+      <button id="assemble-btn" class="btn-primary" onclick="assembleFilm()" style="padding:8px 16px">▶ Assemble full film</button>
       <span id="assemble-status" style="font-size:0.75rem;color:var(--text-muted)"></span>
     </div>
-    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Plays the whole film as one continuous stitched clip (graded). Re-run the GRADED export to refresh it after new VFX is approved.</div>
+    <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px">Plays the whole film in shot order with the current VFX cut in — approved version if there is one, else the latest. Each shot uses its source audio and is cut to its source length, so longer AI clips are trimmed. Nothing to re-export: it always reflects what's on the page now.</div>
     <div class="video-container" id="video-container">
       <div class="video-drop" id="video-drop">
         <p>Drop a video file here, browse, or paste a Google Drive link</p>
@@ -947,7 +947,8 @@ function openVersionMedia(si, kind) {
   }
   const noFile = (kind === 'video' && !isVid);
   if (v.driveId && !noFile) { dl.href = driveView(v.driveId); dl.style.display=''; note.textContent='Opens full quality in Drive.'; }
-  else { dl.style.display='none'; note.textContent = noFile ? '' : 'Proxy preview (full master mirrors to Drive).'; }
+  else if (v.proxyUrl && !noFile) { dl.href = v.proxyUrl; dl.setAttribute('download', v.filename||''); dl.style.display=''; note.textContent='Downloads the original full-quality file.'; }
+  else { dl.style.display='none'; note.textContent = ''; }
   document.getElementById('media-modal').classList.add('active');
 }
 
@@ -1209,21 +1210,176 @@ function loadVideo(file) {
   localStorage.setItem('shotlist_preview_file', file.name);
 }
 
-// ── Assembled film: one continuous stitched MP4 (seamless, no per-clip load gaps) ──
-function assembleFilm() {
+// ── Assembled film: sequenced live in the browser from current cloud data ──
+// The source proxy is authoritative for BOTH audio and length: every shot plays its
+// own source audio, and is cut at durationSecs. The picture is swapped for the shot's
+// VFX version (approved wins, else latest) when there is one — a longer AI clip is
+// simply cut short, a shorter one holds its last frame. Nothing is pre-rendered, so
+// the film is always current with whatever is on the page right now.
+const film = { list: [], idx: 0, stages: [], cur: 0, playing: false, raf: 0, startedAt: 0 };
+
+function filmPlaylist() {
+  return shots
+    .filter(s => s.clipProxy && Number(s.durationSecs) > 0)
+    .slice()
+    .sort((a, b) => (a.number || 0) - (b.number || 0))
+    .map(s => {
+      const v = previewVersion(s);
+      const url = (v && v.proxyUrl && !v.proxyUrl.startsWith('data:')) ? v.proxyUrl : '';
+      const isVid = url && (v.type || '').startsWith('video');
+      const isImg = url && (v.type || '').startsWith('image');
+      return {
+        shotId: s.shotId,
+        number: s.number,
+        dur: Number(s.durationSecs),
+        audioUrl: s.clipProxy,                        // source clip: audio + true length
+        videoUrl: isImg ? '' : (isVid ? url : s.clipProxy),
+        stillUrl: isImg ? url : '',
+        label: (isVid || isImg) ? `VFX v${v.v}${v.approved ? ' ✓' : ''}` : 'source',
+      };
+    });
+}
+
+function makeStage() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;inset:0;display:none;background:#000';
+  const video = document.createElement('video');
+  video.muted = true; video.playsInline = true; video.preload = 'auto';
+  video.style.cssText = 'width:100%;height:100%;object-fit:contain;display:none';
+  const img = document.createElement('img');
+  img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:none';
+  const audio = document.createElement('audio');
+  audio.preload = 'auto';
+  wrap.append(video, img, audio);
+  return { wrap, video, img, audio, entry: null };
+}
+
+// Resolve as soon as the element is buffered enough, but never hang the film on a
+// dead URL (R2 hiccup, deleted version) — time out and let it play through silent/black.
+function armMedia(el, url, isImg) {
+  return new Promise(resolve => {
+    const t = setTimeout(resolve, 8000);
+    const done = () => { clearTimeout(t); resolve(); };
+    if (isImg) { el.onload = done; el.onerror = done; el.src = url; }
+    else { el.oncanplaythrough = done; el.onerror = done; el.src = url; el.load(); }
+  });
+}
+
+// Tags the stage with its entry immediately AND exposes the in-flight load as
+// st.loading — a preloading stage is claimed but not yet playable, and starting it
+// early is what drifts the VFX picture behind the source audio.
+function loadStage(st, e) {
+  st.entry = e;
+  const jobs = [armMedia(st.audio, e.audioUrl, false)];
+  if (e.stillUrl) {
+    st.video.style.display = 'none'; st.video.removeAttribute('src'); st.video.load();
+    st.img.style.display = '';
+    jobs.push(armMedia(st.img, e.stillUrl, true));
+  } else {
+    st.img.style.display = 'none'; st.img.removeAttribute('src');
+    st.video.style.display = '';
+    jobs.push(armMedia(st.video, e.videoUrl, false));
+  }
+  st.loading = Promise.all(jobs);
+  return st.loading;
+}
+
+function stageReady(st, e) {
+  return st.entry === e ? st.loading : loadStage(st, e);
+}
+
+function startStage(st) {
+  st.wrap.style.display = '';
+  try { st.audio.currentTime = 0; } catch (_) {}
+  st.audio.play().catch(() => {});
+  if (!st.entry.stillUrl) {
+    try { st.video.currentTime = 0; } catch (_) {}
+    st.video.play().catch(() => {});
+  }
+  film.startedAt = performance.now();
+}
+
+function idleStage(st) {
+  st.wrap.style.display = 'none';
+  st.audio.pause();
+  st.video.pause();
+}
+
+function filmTick() {
+  if (!film.playing) return;
+  const st = film.stages[film.cur];
+  const e = st.entry;
+  // Cut on the source audio clock; fall back to wall clock if the track never starts
+  // (shot 1 has no rendered audio) so a silent shot can't stall the film.
+  const wall = (performance.now() - film.startedAt) / 1000;
+  const elapsed = st.audio.currentTime > 0 ? st.audio.currentTime : wall;
+  // If the network makes a remote VFX clip stutter, pull the picture back onto the
+  // source audio clock rather than let the shot play out of sync.
+  if (!e.stillUrl && !st.video.paused && !st.video.ended && !st.video.seeking
+      && st.audio.currentTime > 0 && st.audio.currentTime - st.video.currentTime > 0.25) {
+    st.video.currentTime = st.audio.currentTime;
+  }
+  if (elapsed >= e.dur - 0.02 || wall >= e.dur + 0.5) { advanceFilm(); return; }
+  film.raf = requestAnimationFrame(filmTick);
+}
+
+async function advanceFilm() {
+  const prev = film.stages[film.cur];
+  film.idx++;
+  if (film.idx >= film.list.length) { stopFilm('Film ended'); return; }
+  film.cur = 1 - film.cur;
+  const next = film.stages[film.cur];
+  await stageReady(next, film.list[film.idx]);
+  if (!film.playing) return;
+  startStage(next);
+  idleStage(prev);
+  filmStatus();
+  // Buffer the shot after this one into the stage we just freed.
+  if (film.list[film.idx + 1]) loadStage(prev, film.list[film.idx + 1]);
+  film.raf = requestAnimationFrame(filmTick);
+}
+
+function filmStatus() {
+  const e = film.list[film.idx];
+  document.getElementById('assemble-status').textContent =
+    `Shot ${e.number} (${e.shotId}) — ${e.label} · ${film.idx + 1}/${film.list.length}`;
+}
+
+function stopFilm(msg) {
+  film.playing = false;
+  cancelAnimationFrame(film.raf);
+  film.stages.forEach(idleStage);
+  document.getElementById('assemble-btn').textContent = '▶ Assemble full film';
+  document.getElementById('assemble-status').textContent = msg || '';
+}
+
+async function assembleFilm() {
+  if (film.playing) { stopFilm(''); return; }
   const status = document.getElementById('assemble-status');
-  const container = document.getElementById('video-container');
-  // The pipeline pre-stitches all clip proxies into web/assembled_film.mp4.
-  const withProxy = shots.find(s => s.clipProxy);
-  if (!withProxy) {
-    status.textContent = 'No film yet. Run the GRADED export first.';
+  const btn = document.getElementById('assemble-btn');
+  film.list = filmPlaylist();
+  if (!film.list.length) {
+    status.textContent = 'No clips yet. Run the GRADED export first.';
     return;
   }
-  const webDir = withProxy.clipProxy.replace(/\/[^/]+$/, '');   // e.g. export_v006/web
-  const filmUrl = `${webDir}/assembled_film.mp4`;
-  status.textContent = 'Playing stitched film';
-  container.innerHTML = `<video controls autoplay playsinline style="width:100%;height:100%" src="${filmUrl}"
-      onerror="document.getElementById('assemble-status').textContent='Stitched film not found — re-run the GRADED export to generate it.'"></video>`;
+  const vfxCount = film.list.filter(e => e.label !== 'source').length;
+  status.textContent = 'Buffering…';
+  btn.textContent = '■ Stop';
+
+  const container = document.getElementById('video-container');
+  container.innerHTML = '';
+  film.stages = [makeStage(), makeStage()];
+  film.stages.forEach(st => container.append(st.wrap));
+  film.idx = 0; film.cur = 0;
+
+  await loadStage(film.stages[0], film.list[0]);
+  film.playing = true;
+  startStage(film.stages[0]);
+  filmStatus();
+  if (film.list[1]) loadStage(film.stages[1], film.list[1]);
+  film.raf = requestAnimationFrame(filmTick);
+  document.getElementById('preview-info').firstElementChild.textContent =
+    `${film.list.length} shots · ${vfxCount} with VFX · each cut to its source length, source audio.`;
 }
 
 function loadDriveVideo() {
